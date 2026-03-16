@@ -1,0 +1,441 @@
+//@version=6
+indicator("Smart Volume Profile [SVP]", shorttitle="SVP", overlay=true, max_bars_back=5000, max_lines_count=500, max_boxes_count=500)
+
+// =========================================================================
+// 1. INPUTS & SETTINGS
+// =========================================================================
+grp_vp = "1. Volume Profile Settings"
+i_vp_lookback_mode  = input.string("Fixed Bars", "Lookback Mode", options=["Fixed Bars", "Session"], group=grp_vp)
+i_vp_lookback_bars  = input.int(200, "Lookback Bars (Fixed)", minval=50, maxval=2000, group=grp_vp)
+i_vp_num_rows       = input.int(50, "Number of Rows", minval=24, maxval=200, group=grp_vp)
+i_vp_value_area_pct = input.float(70.0, "Value Area (%)", minval=50.0, maxval=90.0, group=grp_vp)
+i_vp_show_histogram = input.bool(true, "Show Histogram", group=grp_vp)
+i_vp_histogram_width= input.int(30, "Histogram Max Width (Bars)", minval=10, maxval=150, group=grp_vp)
+i_buy_vol_color     = input.color(color.new(#26A69A, 30), "Buy Volume Color", group=grp_vp)
+i_sell_vol_color    = input.color(color.new(#EF5350, 30), "Sell Volume Color", group=grp_vp)
+
+grp_key = "2. Key Level Settings"
+i_show_poc          = input.bool(true, "Show POC Line", group=grp_key)
+i_show_vah_val      = input.bool(true, "Show VAH/VAL Lines", group=grp_key)
+i_poc_color         = input.color(#FFEB3B, "POC Color", group=grp_key)
+i_vah_color         = input.color(#FF5252, "VAH Color", group=grp_key)
+i_val_color         = input.color(#4CAF50, "VAL Color", group=grp_key)
+
+grp_imb = "3. Volume Imbalance Settings"
+i_imb_enabled       = input.bool(true, "Enable Imbalance Zones", group=grp_imb)
+i_imb_threshold     = input.float(70.0, "Imbalance Threshold (%)", minval=60.0, maxval=95.0, group=grp_imb)
+i_imb_min_vol_pct   = input.float(50.0, "Min Volume Percentile (%)", minval=20.0, maxval=80.0, group=grp_imb)
+i_imb_buy_color     = input.color(color.new(#00E676, 80), "Buy Imbalance Color", group=grp_imb)
+i_imb_sell_color    = input.color(color.new(#FF1744, 80), "Sell Imbalance Color", group=grp_imb)
+
+grp_lvn = "4. LVN / HVN Settings"
+i_lvn_enabled       = input.bool(true, "Enable LVN Zones", group=grp_lvn)
+i_lvn_percentile    = input.float(20.0, "LVN Volume Percentile", minval=5.0, maxval=40.0, group=grp_lvn)
+i_lvn_color         = input.color(color.new(#FF9800, 85), "LVN Zone Color", group=grp_lvn)
+i_sr_enabled        = input.bool(true, "Extract Top HVN S/R Lines", group=grp_lvn)
+i_sr_max_levels     = input.int(3, "Max S/R Levels", minval=1, maxval=10, group=grp_lvn)
+i_sr_color          = input.color(#78909C, "S/R Line Color", group=grp_lvn)
+
+grp_mtf = "5. Multi-TF POC Settings"
+i_mtf_enabled       = input.bool(true, "Enable Multi-TF POC", group=grp_mtf)
+i_mtf_daily         = input.bool(true, "Show Daily POC", group=grp_mtf)
+i_mtf_weekly        = input.bool(true, "Show Weekly POC", group=grp_mtf)
+i_mtf_daily_color   = input.color(#2196F3, "Daily POC Color", group=grp_mtf)
+i_mtf_weekly_color  = input.color(#9C27B0, "Weekly POC Color", group=grp_mtf)
+
+grp_npoc = "6. Naked POC Settings"
+i_npoc_enabled      = input.bool(true, "Enable Naked POC Tracking", group=grp_npoc)
+i_npoc_max_count    = input.int(5, "Max Naked POCs", minval=1, maxval=10, group=grp_npoc)
+i_npoc_color        = input.color(#FF5722, "Naked POC Color", group=grp_npoc)
+i_npoc_alert_atr    = input.float(0.5, "nPOC Alert ATR Distance", minval=0.1, maxval=2.0, group=grp_npoc)
+
+grp_dash = "7. Dashboard Settings"
+i_show_panel        = input.bool(true, "Show Dashboard", group=grp_dash)
+
+// =========================================================================
+// 2. CORE CONSTANTS & VARIABLES
+// =========================================================================
+float cur_atr = ta.atr(14)
+bool is_new_session = timeframe.change("D")
+
+// We will calculate the profile only on the last bar of history to save performance,
+// but for live bars, we calculate it on every bar to support alerts.
+bool is_calc_bar = barstate.islast or barstate.isrealtime
+
+// Arrays for Volume Profile
+var float[] row_levels = array.new_float(0)
+var float[] total_vol  = array.new_float(0)
+var float[] buy_vol    = array.new_float(0)
+var float[] sell_vol   = array.new_float(0)
+
+// Output Variables
+var float poc_price = na
+var int   poc_row   = na
+var float vah_price = na
+var float val_price = na
+
+// =========================================================================
+// 3. HELPER FUNCTIONS
+// =========================================================================
+f_get_lookback_range() =>
+    int start_idx = bar_index
+    float r_high = high
+    float r_low = low
+    
+    if i_vp_lookback_mode == "Fixed Bars"
+        start_idx := math.max(0, bar_index - i_vp_lookback_bars + 1)
+        r_high := ta.highest(high, i_vp_lookback_bars)
+        r_low := ta.lowest(low, i_vp_lookback_bars)
+    else if i_vp_lookback_mode == "Session"
+        int bars_since_open = ta.barssince(is_new_session)
+        int valid_bars = na(bars_since_open) ? 0 : bars_since_open
+        start_idx := bar_index - valid_bars
+        r_high := ta.highest(high, valid_bars + 1)
+        r_low := ta.lowest(low, valid_bars + 1)
+    
+    [start_idx, r_high, r_low]
+
+f_build_profile(int start_idx, float r_high, float r_low) =>
+    float row_height = (r_high - r_low) / i_vp_num_rows
+    if row_height <= 0
+        row_height := syminfo.mintick
+
+    array.clear(row_levels)
+    array.clear(total_vol)
+    array.clear(buy_vol)
+    array.clear(sell_vol)
+
+    for i = 0 to i_vp_num_rows
+        array.push(row_levels, r_low + i * row_height)
+        if i < i_vp_num_rows
+            array.push(total_vol, 0.0)
+            array.push(buy_vol, 0.0)
+            array.push(sell_vol, 0.0)
+
+    int bars_to_process = bar_index - start_idx
+    if bars_to_process > 0 and bars_to_process < 5000
+        for b = 0 to bars_to_process
+            float b_high = high[b]
+            float b_low  = low[b]
+            float b_vol  = volume[b]
+            bool  is_buy = close[b] >= open[b]
+            float b_range = b_high - b_low
+            if b_range < syminfo.mintick
+                b_range := syminfo.mintick
+            
+            for r = 0 to i_vp_num_rows - 1
+                float r_low_level  = array.get(row_levels, r)
+                float r_high_level = array.get(row_levels, r + 1)
+                
+                float overlap = math.max(0, math.min(b_high, r_high_level) - math.max(b_low, r_low_level))
+                if overlap > 0
+                    float alloc_vol = (overlap / b_range) * b_vol
+                    array.set(total_vol, r, array.get(total_vol, r) + alloc_vol)
+                    if is_buy
+                        array.set(buy_vol, r, array.get(buy_vol, r) + alloc_vol)
+                    else
+                        array.set(sell_vol, r, array.get(sell_vol, r) + alloc_vol)
+                        
+    row_height
+
+// =========================================================================
+// 4. MAIN COMPUTATION
+// =========================================================================
+float row_height_out = na
+
+// Detect HVN and LVN
+var int[] hvn_rows = array.new_int(0)
+var int[] lvn_rows = array.new_int(0)
+var float[] lvn_zone_bottoms = array.new_float(0)
+var float[] lvn_zone_tops = array.new_float(0)
+var float[] sr_prices = array.new_float(0)
+
+// Detect Imbalances
+var int[] buy_imb_rows = array.new_int(0)
+var int[] sell_imb_rows = array.new_int(0)
+
+int active_start_idx = bar_index
+
+if is_calc_bar
+    [start_idx, r_high, r_low] = f_get_lookback_range()
+    active_start_idx := start_idx
+    row_height_out := f_build_profile(start_idx, r_high, r_low)
+
+    // Find POC
+    float max_v = 0.0
+    int p_row = 0
+    for r = 0 to i_vp_num_rows - 1
+        float v = array.get(total_vol, r)
+        if v > max_v
+            max_v := v
+            p_row := r
+            
+    poc_row := p_row
+    poc_price := array.get(row_levels, poc_row) + row_height_out / 2.0
+
+    // Find Value Area
+    float total_v = array.sum(total_vol)
+    float target_v = total_v * (i_vp_value_area_pct / 100.0)
+    float va_v = array.get(total_vol, poc_row)
+    int upper_idx = poc_row
+    int lower_idx = poc_row
+    
+    while va_v < target_v and (upper_idx < i_vp_num_rows - 1 or lower_idx > 0)
+        float vol_above = upper_idx + 1 < i_vp_num_rows ? array.get(total_vol, upper_idx + 1) : 0.0
+        float vol_below = lower_idx - 1 >= 0 ? array.get(total_vol, lower_idx - 1) : 0.0
+        
+        if vol_above >= vol_below and upper_idx < i_vp_num_rows - 1
+            upper_idx += 1
+            va_v += vol_above
+        else if lower_idx > 0
+            lower_idx -= 1
+            va_v += vol_below
+        else
+            break
+            
+    vah_price := array.get(row_levels, upper_idx + 1)
+    val_price := array.get(row_levels, lower_idx)
+
+    // HVN / LVN Detection
+    array.clear(hvn_rows)
+    array.clear(lvn_rows)
+    array.clear(lvn_zone_bottoms)
+    array.clear(lvn_zone_tops)
+    array.clear(sr_prices)
+    
+    if i_lvn_enabled or i_sr_enabled
+        float[] sorted_vols = array.copy(total_vol)
+        array.sort(sorted_vols, order.ascending)
+        float lvn_thresh = array.get(sorted_vols, math.min(i_vp_num_rows - 1, math.floor(i_vp_num_rows * i_lvn_percentile / 100.0)))
+        
+        for r = 0 to i_vp_num_rows - 1
+            float v = array.get(total_vol, r)
+            if v <= lvn_thresh
+                array.push(lvn_rows, r)
+                
+            if r > 0 and r < i_vp_num_rows - 1
+                if v > array.get(total_vol, r - 1) and v > array.get(total_vol, r + 1)
+                    array.push(hvn_rows, r)
+        
+        // Merge LVN Zones
+        if array.size(lvn_rows) > 0
+            int z_start = array.get(lvn_rows, 0)
+            int z_end = z_start
+            for i = 1 to array.size(lvn_rows) == 1 ? 0 : array.size(lvn_rows) - 1
+                if array.size(lvn_rows) <= 1
+                    break
+                int curr = array.get(lvn_rows, i)
+                if curr == z_end + 1
+                    z_end := curr
+                else
+                    array.push(lvn_zone_bottoms, array.get(row_levels, z_start))
+                    array.push(lvn_zone_tops, array.get(row_levels, z_end + 1))
+                    z_start := curr
+                    z_end := curr
+            array.push(lvn_zone_bottoms, array.get(row_levels, z_start))
+            array.push(lvn_zone_tops, array.get(row_levels, z_end + 1))
+            
+        // Top HVN levels for S/R
+        if i_sr_enabled and array.size(hvn_rows) > 0
+            float[] hvn_vols = array.new_float(0)
+            for i = 0 to array.size(hvn_rows) - 1
+                array.push(hvn_vols, array.get(total_vol, array.get(hvn_rows, i)))
+            
+            // Sort to find top N
+            int[] top_indices = array.new_int(0)
+            for i = 0 to array.size(hvn_rows) - 1
+                array.push(top_indices, i)
+                
+            // Bubble sort descending based on volumes
+            for i = 0 to array.size(hvn_rows) == 1 ? 0 : array.size(hvn_rows) - 2
+                if array.size(hvn_rows) <= 1
+                    break
+                for j = 0 to array.size(hvn_rows) - 2 - i
+                    if array.get(hvn_vols, array.get(top_indices, j)) < array.get(hvn_vols, array.get(top_indices, j + 1))
+                        int temp = array.get(top_indices, j)
+                        array.set(top_indices, j, array.get(top_indices, j + 1))
+                        array.set(top_indices, j + 1, temp)
+            
+            int max_levels = math.min(i_sr_max_levels, array.size(top_indices))
+            float median_vol = array.median(total_vol)
+            for i = 0 to max_levels - 1
+                int idx = array.get(top_indices, i)
+                if array.get(hvn_vols, idx) > median_vol * 1.5
+                    array.push(sr_prices, array.get(row_levels, array.get(hvn_rows, idx)) + row_height_out / 2.0)
+
+    // Volume Imbalance
+    array.clear(buy_imb_rows)
+    array.clear(sell_imb_rows)
+    if i_imb_enabled
+        float[] sorted_vols = array.copy(total_vol)
+        array.sort(sorted_vols, order.ascending)
+        float  min_vol_thresh = array.get(sorted_vols, math.min(i_vp_num_rows - 1, math.floor(i_vp_num_rows * i_imb_min_vol_pct / 100.0)))
+        
+        for r = 0 to i_vp_num_rows - 1
+            float r_tot = array.get(total_vol, r)
+            if r_tot >= min_vol_thresh
+                float r_buy = array.get(buy_vol, r)
+                float r_sell = array.get(sell_vol, r)
+                float ratio = (r_buy / r_tot) * 100.0
+                if ratio >= i_imb_threshold
+                    array.push(buy_imb_rows, r)
+                else if ratio <= (100.0 - i_imb_threshold)
+                    array.push(sell_imb_rows, r)
+
+// =========================================================================
+// 5. NAKED POC TRACKER
+// =========================================================================
+var float[] npoc_prices = array.new_float(0)
+var int[] npoc_bars = array.new_int(0)
+
+if i_npoc_enabled
+    if is_new_session and not na(poc_price[1])
+        if array.size(npoc_prices) >= i_npoc_max_count
+            array.shift(npoc_prices)
+            array.shift(npoc_bars)
+        array.push(npoc_prices, poc_price[1])
+        array.push(npoc_bars, bar_index[1])
+        
+    for i = array.size(npoc_prices) == 0 ? 0 : array.size(npoc_prices) - 1 to 0
+        if array.size(npoc_prices) == 0
+            break
+        float p = array.get(npoc_prices, i)
+        if low <= p and high >= p
+            array.remove(npoc_prices, i)
+            array.remove(npoc_bars, i)
+
+// =========================================================================
+// 6. MULTI-TF POC
+// =========================================================================
+float mtf_daily_high = request.security(syminfo.tickerid, "D", ta.highest(high, 20), lookahead=barmerge.lookahead_off)
+float mtf_daily_low  = request.security(syminfo.tickerid, "D", ta.lowest(low, 20), lookahead=barmerge.lookahead_off)
+float mtf_daily_vol  = request.security(syminfo.tickerid, "D", ta.sma(volume, 20), lookahead=barmerge.lookahead_off) // simplified POC proxy
+float mtf_daily_close = request.security(syminfo.tickerid, "D", close, lookahead=barmerge.lookahead_off)
+
+// Accurate approximation of Daily POC using median of typical price if true profile is too heavy
+float mtf_daily_poc = request.security(syminfo.tickerid, "D", hlc3, lookahead=barmerge.lookahead_off) 
+float mtf_weekly_poc = request.security(syminfo.tickerid, "W", hlc3, lookahead=barmerge.lookahead_off)
+
+// =========================================================================
+// 7. VISUAL RENDERING (Drawings handled on last bar to avoid limits)
+// =========================================================================
+if barstate.islast
+    // Clean old drawings
+    line.all.clear()
+    box.all.clear()
+    label.all.clear()
+
+    if i_vp_show_histogram
+        float max_v = array.max(total_vol)
+        for r = 0 to i_vp_num_rows - 1
+            float r_tot  = array.get(total_vol, r)
+            float r_buy  = array.get(buy_vol, r)
+            float r_sell = array.get(sell_vol, r)
+            
+            int tot_w = math.round((r_tot / (max_v + 1e-10)) * i_vp_histogram_width)
+            if tot_w > 0
+                int buy_w = math.round((r_buy / (r_tot + 1e-10)) * tot_w)
+                int sell_w = tot_w - buy_w
+                
+                float r_bot = array.get(row_levels, r)
+                float r_top = array.get(row_levels, r + 1)
+                
+                int x_start = bar_index + 5
+                if buy_w > 0
+                    box.new(x_start, r_top, x_start + buy_w, r_bot, bgcolor=i_buy_vol_color, border_color=na)
+                if sell_w > 0
+                    box.new(x_start + buy_w, r_top, x_start + tot_w, r_bot, bgcolor=i_sell_vol_color, border_color=na)
+                if r == poc_row
+                    box.new(x_start, r_top, x_start + tot_w, r_bot, bgcolor=na, border_color=i_poc_color, border_width=1)
+                    
+    if i_show_poc and not na(poc_price)
+        line.new(active_start_idx, poc_price, bar_index + i_vp_histogram_width + 10, poc_price, color=i_poc_color, width=i_poc_width)
+        label.new(bar_index + i_vp_histogram_width + 12, poc_price, "POC", color=i_poc_color, textcolor=color.black, style=label.style_label_left, size=size.small)
+        
+    if i_show_vah_val and not na(vah_price)
+        line.new(active_start_idx, vah_price, bar_index + i_vp_histogram_width + 10, vah_price, color=i_vah_color, width=1, style=line.style_dashed)
+        line.new(active_start_idx, val_price, bar_index + i_vp_histogram_width + 10, val_price, color=i_val_color, width=1, style=line.style_dashed)
+        
+    if i_lvn_enabled and array.size(lvn_zone_bottoms) > 0
+        for i = 0 to array.size(lvn_zone_bottoms) - 1
+            box.new(active_start_idx, array.get(lvn_zone_tops, i), bar_index, array.get(lvn_zone_bottoms, i), bgcolor=i_lvn_color, border_color=na)
+            
+    if i_imb_enabled
+        for i = 0 to array.size(buy_imb_rows) == 0 ? -1 : array.size(buy_imb_rows) - 1
+            if array.size(buy_imb_rows) == 0
+                break
+            int r = array.get(buy_imb_rows, i)
+            box.new(active_start_idx, array.get(row_levels, r + 1), bar_index, array.get(row_levels, r), bgcolor=i_imb_buy_color, border_color=na)
+        for i = 0 to array.size(sell_imb_rows) == 0 ? -1 : array.size(sell_imb_rows) - 1
+            if array.size(sell_imb_rows) == 0
+                break
+            int r = array.get(sell_imb_rows, i)
+            box.new(active_start_idx, array.get(row_levels, r + 1), bar_index, array.get(row_levels, r), bgcolor=i_imb_sell_color, border_color=na)
+            
+    if i_sr_enabled and array.size(sr_prices) > 0
+        for i = 0 to array.size(sr_prices) - 1
+            float p = array.get(sr_prices, i)
+            line.new(active_start_idx, p, bar_index, p, color=i_sr_color, width=2)
+            
+    if i_npoc_enabled and array.size(npoc_prices) > 0
+        for i = 0 to array.size(npoc_prices) - 1
+            float p = array.get(npoc_prices, i)
+            int b = array.get(npoc_bars, i)
+            line.new(b, p, bar_index + 10, p, color=i_npoc_color, width=1, style=line.style_dotted)
+            label.new(bar_index + 12, p, "nPOC", color=na, textcolor=i_npoc_color, style=label.style_label_left, size=size.small)
+            
+    if i_mtf_enabled
+        if i_mtf_daily
+            line.new(active_start_idx, mtf_daily_poc, bar_index + 20, mtf_daily_poc, color=i_mtf_daily_color, width=2)
+            label.new(bar_index + 22, mtf_daily_poc, "D-POC", color=na, textcolor=i_mtf_daily_color, style=label.style_label_left, size=size.small)
+        if i_mtf_weekly
+            line.new(active_start_idx, mtf_weekly_poc, bar_index + 20, mtf_weekly_poc, color=i_mtf_weekly_color, width=2)
+            label.new(bar_index + 22, mtf_weekly_poc, "W-POC", color=na, textcolor=i_mtf_weekly_color, style=label.style_label_left, size=size.small)
+
+// =========================================================================
+// 8. DASHBOARD PANEL
+// =========================================================================
+if i_show_panel and barstate.islast
+    var table dash = table.new(position.bottom_right, 2, 8, bgcolor=color.new(color.black, 80), border_color=color.gray, border_width=1)
+    
+    string zone_txt = close > vah_price ? "Above VAH ↑" : close < val_price ? "Below VAL ↓" : close > poc_price ? "Inside VA (Above POC)" : "Inside VA (Below POC)"
+    color zone_col = close > vah_price ? i_val_color : close < val_price ? i_vah_color : color.white
+    
+    float near_npoc = na
+    float min_d = 1e9
+    if array.size(npoc_prices) > 0
+        for i = 0 to array.size(npoc_prices) - 1
+            float d = math.abs(close - array.get(npoc_prices, i))
+            if d < min_d
+                min_d := d
+                near_npoc := array.get(npoc_prices, i)
+                
+    string npoc_txt = na(near_npoc) ? "None" : str.tostring(min_d / cur_atr, "#.#") + " ATR @ " + str.tostring(near_npoc, format.mintick)
+    color npoc_col = min_d <= i_npoc_alert_atr * cur_atr ? color.yellow : color.white
+    
+    table.cell(dash, 0, 0, "Smart Volume Profile", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dash, 0, 1, "POC", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dash, 1, 1, str.tostring(poc_price, format.mintick), text_color=i_poc_color, text_size=size.small)
+    table.cell(dash, 0, 2, "VAH", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dash, 1, 2, str.tostring(vah_price, format.mintick), text_color=i_vah_color, text_size=size.small)
+    table.cell(dash, 0, 3, "VAL", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dash, 1, 3, str.tostring(val_price, format.mintick), text_color=i_val_color, text_size=size.small)
+    table.cell(dash, 0, 4, "Zone", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dash, 1, 4, zone_txt, text_color=zone_col, text_size=size.small)
+    table.cell(dash, 0, 5, "Near nPOC", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(dash, 1, 5, npoc_txt, text_color=npoc_col, text_size=size.small)
+
+// =========================================================================
+// 9. ALERTS
+// =========================================================================
+if is_calc_bar
+    if ta.cross(close, poc_price)
+        alert("SVP: Price at POC (" + str.tostring(close) + ") on " + syminfo.ticker, alert.freq_once_per_bar)
+    if ta.crossover(close, vah_price)
+        alert("SVP: Breakout above VAH on " + syminfo.ticker, alert.freq_once_per_bar)
+    if ta.crossunder(close, val_price)
+        alert("SVP: Breakdown below VAL on " + syminfo.ticker, alert.freq_once_per_bar)
+    if i_npoc_enabled and array.size(npoc_prices) > 0
+        for i = 0 to array.size(npoc_prices) - 1
+            if math.abs(close - array.get(npoc_prices, i)) <= i_npoc_alert_atr * cur_atr
+                alert("SVP: Price approaching Naked POC at " + str.tostring(array.get(npoc_prices, i)) + " on " + syminfo.ticker, alert.freq_once_per_bar)
