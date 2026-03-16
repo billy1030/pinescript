@@ -12,15 +12,17 @@ i_vp_lookback_bars  = input.int(200, "Lookback Bars (Fixed)", minval=50, maxval=
 i_vp_num_rows       = input.int(50, "Number of Rows", minval=24, maxval=200, group=grp_vp)
 i_vp_value_area_pct = input.float(70.0, "Value Area (%)", minval=50.0, maxval=90.0, group=grp_vp)
 i_vp_show_histogram = input.bool(true, "Show Histogram", group=grp_vp)
-i_vp_histogram_width= input.int(30, "Histogram Max Width (Bars)", minval=10, maxval=150, group=grp_vp)
-i_buy_vol_color     = input.color(color.new(#26A69A, 30), "Buy Volume Color", group=grp_vp)
-i_sell_vol_color    = input.color(color.new(#EF5350, 30), "Sell Volume Color", group=grp_vp)
+i_vp_histogram_width= input.int(40, "Histogram Max Width (Bars)", minval=10, maxval=150, group=grp_vp)
+i_vp_gap_pct        = input.int(10, "Row Gap (%)", tooltip="Spacing between histogram bars", minval=0, maxval=50, group=grp_vp)
+i_buy_vol_color     = input.color(color.new(#4DD0E1, 10), "Buy Volume Color (Cyan)", group=grp_vp)
+i_sell_vol_color    = input.color(color.new(#F06292, 10), "Sell Volume Color (Pink)", group=grp_vp)
 
 grp_key = "2. Key Level Settings"
 i_show_poc          = input.bool(true, "Show POC Line", group=grp_key)
+i_highlight_poc_row = input.bool(false, "Highlight POC Row Box", group=grp_key)
 i_show_vah_val      = input.bool(true, "Show VAH/VAL Lines", group=grp_key)
-i_poc_color         = input.color(#FFEB3B, "POC Color", group=grp_key)
-i_poc_width         = input.int(2, "POC Line Width", minval=1, maxval=4, group=grp_key)
+i_poc_color         = input.color(color.black, "POC Line Color", group=grp_key)
+i_poc_width         = input.int(1, "POC Line Width", minval=1, maxval=4, group=grp_key)
 i_vah_color         = input.color(#FF5252, "VAH Color", group=grp_key)
 i_val_color         = input.color(#4CAF50, "VAL Color", group=grp_key)
 
@@ -388,18 +390,29 @@ if barstate.islast
                 
                 float r_bot = array.get(row_levels, r)
                 float r_top = array.get(row_levels, r + 1)
+                float r_mid = (r_top + r_bot) / 2.0
+                
+                // Gap adjustment
+                float gap = (r_top - r_bot) * (i_vp_gap_pct / 100.0)
+                float box_top = r_top - gap / 2.0
+                float box_bot = r_bot + gap / 2.0
+                
+                // Value Area colors
+                bool is_va = (r_mid <= vah_price) and (r_mid >= val_price)
+                color curr_buy_col = is_va ? i_buy_vol_color : color.new(i_buy_vol_color, 65)
+                color curr_sell_col = is_va ? i_sell_vol_color : color.new(i_sell_vol_color, 65)
                 
                 int x_start = active_end_idx
                 if buy_w > 0
-                    box.new(x_start - buy_w, r_top, x_start, r_bot, bgcolor=i_buy_vol_color, border_color=na)
+                    box.new(x_start - buy_w, box_top, x_start, box_bot, bgcolor=curr_buy_col, border_color=na)
                 if sell_w > 0
-                    box.new(x_start - tot_w, r_top, x_start - buy_w, r_bot, bgcolor=i_sell_vol_color, border_color=na)
-                if r == poc_row
-                    box.new(x_start - tot_w, r_top, x_start, r_bot, bgcolor=na, border_color=i_poc_color, border_width=1)
+                    box.new(x_start - tot_w, box_top, x_start - buy_w, box_bot, bgcolor=curr_sell_col, border_color=na)
+                if r == poc_row and i_highlight_poc_row
+                    box.new(x_start - tot_w, box_top, x_start, box_bot, bgcolor=na, border_color=i_poc_color, border_width=1)
                     
     if i_show_poc and not na(poc_price)
-        line.new(active_start_idx, poc_price, active_end_idx + 10, poc_price, color=i_poc_color, width=i_poc_width)
-        label.new(active_end_idx + 12, poc_price, "POC", color=i_poc_color, textcolor=color.black, style=label.style_label_left, size=size.small)
+        line.new(active_start_idx, poc_price, active_end_idx + 10, poc_price, color=i_poc_color, width=i_poc_width, style=line.style_dotted)
+        label.new(active_end_idx + 12, poc_price, "POC " + str.tostring(poc_price, format.mintick), color=color.black, textcolor=color.white, style=label.style_label_left, size=size.small)
         
     if i_show_vah_val and not na(vah_price)
         line.new(active_start_idx, vah_price, active_end_idx + 10, vah_price, color=i_vah_color, width=1, style=line.style_dashed)
