@@ -319,7 +319,8 @@ bool   pos_is_short = pos_state < 0
 
 if i_pos_enabled
     // ---- EXIT CHECKS (priority order) ----
-    if pos_state != 0
+    // In Easy Mode: NO intermediate exits. Position only closes when opposite signal fires (stop-and-reverse).
+    if pos_state != 0 and i_pos_mode != "Easy (100%)"
         float atr_val = cur_atr
 
         // 1. Stop Loss
@@ -389,8 +390,8 @@ if i_pos_enabled
                         pos_size_pct := 0
                         exit_cd_counter := i_pos_reentry_cd
 
-        // 5. Partial exit: opposite MR signal (Disabled in Easy Mode)
-        if pos_action == "NONE" and i_pos_partial_mr and i_pos_mode != "Easy (100%)"
+        // 5. Partial exit: opposite MR signal
+        if pos_action == "NONE" and i_pos_partial_mr
             if pos_is_long and (mr_signal == -5 or mr_signal == -6)
                 pos_action := "PARTIAL_MR"
                 pos_action_size := 50
@@ -408,8 +409,8 @@ if i_pos_enabled
                 else
                     pos_state := pos_state < -1 ? pos_state + 1 : pos_state
 
-        // 6. Partial exit: price returns to kernel midline (Disabled in Easy Mode)
-        if pos_action == "NONE" and i_pos_partial_kernel and i_pos_mode != "Easy (100%)"
+        // 6. Partial exit: price returns to kernel midline
+        if pos_action == "NONE" and i_pos_partial_kernel
             float unreal_l = close - nz(pos_entry_price)
             float unreal_s = nz(pos_entry_price) - close
             if pos_is_long and close[1] > kernelA[1] and close <= kernelA and unreal_l > 0.5 * atr_val
@@ -425,8 +426,8 @@ if i_pos_enabled
                 if pos_size_pct <= 0
                     pos_state := 0
 
-        // 7. HTF trend flips against (Disabled in Easy Mode)
-        if pos_action == "NONE" and i_pos_mode != "Easy (100%)"
+        // 7. HTF trend flips against
+        if pos_action == "NONE"
             if pos_is_long and htf_state == -1
                 pos_action := "PARTIAL_HTF"
                 pos_action_size := 50
@@ -442,35 +443,75 @@ if i_pos_enabled
 
     // ---- ENTRY CHECKS ----
     if pos_action == "NONE"
-        // Tier 1: Initial entry
-        if pos_state == 0 and exit_cd_counter == 0
-            if long_score >= i_pos_tier1_score and long_score > short_score
-                pos_action := "BUY_T1"
-                pos_action_size := i_pos_mode == "Easy (100%)" ? 100 : 50
-                pos_state := 1
-                pos_size_pct := i_pos_mode == "Easy (100%)" ? 100 : 50
-                pos_entry_price := close
-                pos_peak_price := close
-                daily_trades += 1
-            else if short_score >= i_pos_tier1_score and short_score > long_score
+        // Easy Mode: Stop-and-Reverse (flip from LONG to SHORT or vice versa directly)
+        if i_pos_mode == "Easy (100%)"
+            if pos_state == 0 and exit_cd_counter == 0
+                // Flat → enter new position
+                if long_score >= i_pos_tier1_score and long_score > short_score
+                    pos_action := "BUY_T1"
+                    pos_action_size := 100
+                    pos_state := 1
+                    pos_size_pct := 100
+                    pos_entry_price := close
+                    pos_peak_price := close
+                    daily_trades += 1
+                else if short_score >= i_pos_tier1_score and short_score > long_score
+                    pos_action := "SELL_T1"
+                    pos_action_size := 100
+                    pos_state := -1
+                    pos_size_pct := 100
+                    pos_entry_price := close
+                    pos_peak_price := close
+                    daily_trades += 1
+            else if pos_is_long and short_score >= i_pos_tier1_score and short_score > long_score
+                // Currently LONG → flip to SHORT
                 pos_action := "SELL_T1"
-                pos_action_size := i_pos_mode == "Easy (100%)" ? 100 : 50
+                pos_action_size := 100
                 pos_state := -1
-                pos_size_pct := i_pos_mode == "Easy (100%)" ? 100 : 50
+                pos_size_pct := 100
                 pos_entry_price := close
                 pos_peak_price := close
                 daily_trades += 1
-        // Tier 2: Add-on (Only in Complex mode)
-        else if pos_state == 1 and long_score >= i_pos_tier2_score and i_pos_mode == "Complex (50% x 2)"
-            pos_action := "BUY_T2"
-            pos_action_size := 50
-            pos_state := 2
-            pos_size_pct := 100
-        else if pos_state == -1 and short_score >= i_pos_tier2_score and i_pos_mode == "Complex (50% x 2)"
-            pos_action := "SELL_T2"
-            pos_action_size := 50
-            pos_state := -2
-            pos_size_pct := 100
+            else if pos_is_short and long_score >= i_pos_tier1_score and long_score > short_score
+                // Currently SHORT → flip to LONG
+                pos_action := "BUY_T1"
+                pos_action_size := 100
+                pos_state := 1
+                pos_size_pct := 100
+                pos_entry_price := close
+                pos_peak_price := close
+                daily_trades += 1
+        else
+            // Complex Mode: Tiered entries
+            // Tier 1: Initial entry
+            if pos_state == 0 and exit_cd_counter == 0
+                if long_score >= i_pos_tier1_score and long_score > short_score
+                    pos_action := "BUY_T1"
+                    pos_action_size := 50
+                    pos_state := 1
+                    pos_size_pct := 50
+                    pos_entry_price := close
+                    pos_peak_price := close
+                    daily_trades += 1
+                else if short_score >= i_pos_tier1_score and short_score > long_score
+                    pos_action := "SELL_T1"
+                    pos_action_size := 50
+                    pos_state := -1
+                    pos_size_pct := 50
+                    pos_entry_price := close
+                    pos_peak_price := close
+                    daily_trades += 1
+            // Tier 2: Add-on
+            else if pos_state == 1 and long_score >= i_pos_tier2_score
+                pos_action := "BUY_T2"
+                pos_action_size := 50
+                pos_state := 2
+                pos_size_pct := 100
+            else if pos_state == -1 and short_score >= i_pos_tier2_score
+                pos_action := "SELL_T2"
+                pos_action_size := 50
+                pos_state := -2
+                pos_size_pct := 100
 
 // =========================================================================
 // 10. SIGNAL STREAM ENCODING
@@ -547,8 +588,30 @@ if i_pos_enabled and i_pos_show_tags
 // Position info panel (top-right table)
 if i_pos_enabled and i_pos_show_panel
     var table panel = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 70), border_width=1, border_color=color.gray)
-    string dir_txt = pos_state > 0 ? "LONG" : pos_state < 0 ? "SHORT" : "FLAT"
-    color dir_clr = pos_state > 0 ? i_bull_color : pos_state < 0 ? i_bear_color : i_neutral_color
+
+    // Direction text: Easy mode shows BUY/SELL/HOLD/WAIT, Complex mode shows LONG/SHORT/FLAT
+    string dir_txt = ""
+    color dir_clr = i_neutral_color
+    if i_pos_mode == "Easy (100%)"
+        if pos_action == "BUY_T1"
+            dir_txt := "▲ BUY"
+            dir_clr := i_bull_color
+        else if pos_action == "SELL_T1"
+            dir_txt := "▼ SELL"
+            dir_clr := i_bear_color
+        else if pos_state > 0
+            dir_txt := "◆ HOLD LONG"
+            dir_clr := color.new(i_bull_color, 30)
+        else if pos_state < 0
+            dir_txt := "◆ HOLD SHORT"
+            dir_clr := color.new(i_bear_color, 30)
+        else
+            dir_txt := "— WAIT"
+            dir_clr := i_neutral_color
+    else
+        dir_txt := pos_state > 0 ? "LONG" : pos_state < 0 ? "SHORT" : "FLAT"
+        dir_clr := pos_state > 0 ? i_bull_color : pos_state < 0 ? i_bear_color : i_neutral_color
+
     float unreal_pnl = pos_state > 0 ? close - nz(pos_entry_price) : pos_state < 0 ? nz(pos_entry_price) - close : 0.0
 
     // Suggestion Logic
@@ -556,48 +619,68 @@ if i_pos_enabled and i_pos_show_panel
     color sugg_clr  = color.white
     
     // Suggestion logic based on current state and confluence score
-    if pos_state == 0
-        if mr_signal == 6 or mr_signal == -6
-            sugg_txt := "Wait for Reversal (Extreme MR)"
-            sugg_clr := color.yellow
-        else if long_score >= 4 and short_score < 4
-            sugg_txt := "Looking for Long Entry"
-            sugg_clr := i_bull_color
-        else if short_score >= 4 and long_score < 4
-            sugg_txt := "Looking for Short Entry"
-            sugg_clr := i_bear_color
-        else if htf_state == 0
-            sugg_txt := "Neutral Market. Be Patient."
-            sugg_clr := i_neutral_color
-        else
-            sugg_txt := "Wait for Pullback Signal"
-            sugg_clr := i_neutral_color
-    else if pos_state > 0
-        if mr_signal == -6 or mr_signal == -5
-            sugg_txt := "Consider taking Partial Profits!"
-            sugg_clr := color.yellow
-        else if trend_signal == -3
-            sugg_txt := "CAUTION: Bearish Trend Shift"
-            sugg_clr := color.red
-        else if long_score >= i_pos_tier2_score and pos_state == 1
-            sugg_txt := "Trend Strong. Can Add T2"
+    if i_pos_mode == "Easy (100%)"
+        // Simplified advice for Easy mode
+        if pos_state == 0
+            if long_score >= 4 and short_score < 4
+                sugg_txt := "Preparing BUY signal..."
+                sugg_clr := i_bull_color
+            else if short_score >= 4 and long_score < 4
+                sugg_txt := "Preparing SELL signal..."
+                sugg_clr := i_bear_color
+            else
+                sugg_txt := "Waiting for signal..."
+                sugg_clr := i_neutral_color
+        else if pos_state > 0
+            sugg_txt := "Hold until SELL flips"
             sugg_clr := i_bull_color
         else
-            sugg_txt := "Hold Long. Manage Stop Loss."
-            sugg_clr := color.green
-    else if pos_state < 0
-        if mr_signal == 6 or mr_signal == 5
-            sugg_txt := "Consider taking Partial Profits!"
-            sugg_clr := color.yellow
-        else if trend_signal == 3
-            sugg_txt := "CAUTION: Bullish Trend Shift"
-            sugg_clr := color.red
-        else if short_score >= i_pos_tier2_score and pos_state == -1
-            sugg_txt := "Trend Strong. Can Add T2"
+            sugg_txt := "Hold until BUY flips"
             sugg_clr := i_bear_color
-        else
-            sugg_txt := "Hold Short. Manage Stop Loss."
-            sugg_clr := color.red
+    else
+        // Complex mode: detailed advice
+        if pos_state == 0
+            if mr_signal == 6 or mr_signal == -6
+                sugg_txt := "Wait for Reversal (Extreme MR)"
+                sugg_clr := color.yellow
+            else if long_score >= 4 and short_score < 4
+                sugg_txt := "Looking for Long Entry"
+                sugg_clr := i_bull_color
+            else if short_score >= 4 and long_score < 4
+                sugg_txt := "Looking for Short Entry"
+                sugg_clr := i_bear_color
+            else if htf_state == 0
+                sugg_txt := "Neutral Market. Be Patient."
+                sugg_clr := i_neutral_color
+            else
+                sugg_txt := "Wait for Pullback Signal"
+                sugg_clr := i_neutral_color
+        else if pos_state > 0
+            if mr_signal == -6 or mr_signal == -5
+                sugg_txt := "Consider taking Partial Profits!"
+                sugg_clr := color.yellow
+            else if trend_signal == -3
+                sugg_txt := "CAUTION: Bearish Trend Shift"
+                sugg_clr := color.red
+            else if long_score >= i_pos_tier2_score and pos_state == 1
+                sugg_txt := "Trend Strong. Can Add T2"
+                sugg_clr := i_bull_color
+            else
+                sugg_txt := "Hold Long. Manage Stop Loss."
+                sugg_clr := color.green
+        else if pos_state < 0
+            if mr_signal == 6 or mr_signal == 5
+                sugg_txt := "Consider taking Partial Profits!"
+                sugg_clr := color.yellow
+            else if trend_signal == 3
+                sugg_txt := "CAUTION: Bullish Trend Shift"
+                sugg_clr := color.red
+            else if short_score >= i_pos_tier2_score and pos_state == -1
+                sugg_txt := "Trend Strong. Can Add T2"
+                sugg_clr := i_bear_color
+            else
+                sugg_txt := "Hold Short. Manage Stop Loss."
+                sugg_clr := color.red
 
     table.cell(panel, 0, 0, "Position",   text_color=color.white, text_size=size.small)
     table.cell(panel, 1, 0, dir_txt,       text_color=dir_clr,     text_size=size.small)
