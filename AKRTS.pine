@@ -1,0 +1,681 @@
+//@version=6
+indicator("Adaptive Kernel Regression Trading System [AKRTS]", shorttitle="AKRTS", overlay=true, max_bars_back=2000, max_lines_count=500)
+
+// =========================================================================
+// 1. INPUTS & SETTINGS
+// =========================================================================
+grp_kernel = "1. Kernel Settings"
+i_kernelA_type      = input.string("Rational Quadratic", "Kernel A Type", options=["Rational Quadratic", "Gaussian"], group=grp_kernel)
+i_kernelA_lookback  = input.int(15, "Kernel A Lookback", minval=2, group=grp_kernel)
+i_kernelA_bandwidth = input.float(8.0, "Kernel A Bandwidth (h)", minval=0.1, group=grp_kernel)
+i_kernelA_alpha     = input.float(1.0, "Kernel A Alpha (RQ only)", minval=0.1, group=grp_kernel)
+
+i_kernelB_type      = input.string("Gaussian", "Kernel B Type", options=["Rational Quadratic", "Gaussian"], group=grp_kernel)
+i_kernelB_lookback  = input.int(24, "Kernel B Lookback", minval=2, group=grp_kernel)
+i_kernelB_bandwidth = input.float(16.0, "Kernel B Bandwidth (h)", minval=0.1, group=grp_kernel)
+i_kernelB_alpha     = input.float(1.0, "Kernel B Alpha (RQ only)", minval=0.1, group=grp_kernel)
+
+grp_env = "2. Envelope Settings"
+i_envelope_method   = input.string("ATR", "Band Method", options=["ATR", "StdDev"], group=grp_env)
+i_envelope_mult     = input.float(2.0, "Band Multiplier", minval=0.1, step=0.1, group=grp_env)
+i_envelope_atr_len  = input.int(14, "ATR / StdDev Length", minval=1, group=grp_env)
+
+grp_pb = "3. First Pullback Settings"
+i_pb_enabled        = input.bool(true, "Enable Pullback Detection", group=grp_pb)
+i_pb_cooldown       = input.int(10, "Cooldown Bars", minval=1, group=grp_pb)
+i_pb_vol_confirm    = input.bool(true, "Require Volume Confirmation", group=grp_pb)
+i_pb_vol_mult       = input.float(1.5, "Volume Spike Multiplier", minval=0.1, step=0.1, group=grp_pb)
+
+grp_mr = "4. Mean Reversion Settings"
+i_mr_enabled        = input.bool(true, "Enable Mean Reversion", group=grp_mr)
+i_mr_regular_sigma  = input.float(1.5, "Regular Tier Sigma", minval=0.5, step=0.1, group=grp_mr)
+i_mr_strong_sigma   = input.float(2.5, "Strong Tier Sigma", minval=1.0, step=0.1, group=grp_mr)
+i_mr_residual_len   = input.int(50, "Residual StdDev Lookback", minval=5, group=grp_mr)
+
+grp_htf = "5. HTF Trend Filter"
+i_htf_enabled       = input.bool(true, "Enable HTF Filter", group=grp_htf)
+i_htf_res           = input.timeframe("60", "HTF Resolution", group=grp_htf)
+i_htf_lookback      = input.int(20, "HTF Kernel Lookback", minval=2, group=grp_htf)
+i_htf_bandwidth     = input.float(12.0, "HTF Kernel Bandwidth", minval=0.1, group=grp_htf)
+i_htf_show_bg       = input.bool(true, "Show HTF Background Tint", group=grp_htf)
+i_htf_bull_color    = input.color(#2196F3, "HTF Bullish Color (Blue)", group=grp_htf)
+i_htf_bear_color    = input.color(#FFEB3B, "HTF Bearish Color (Yellow)", group=grp_htf)
+
+grp_zz = "6. Zig-Zag Tracker"
+i_show_zigzag       = input.bool(true, "Show Zig-Zag Trend Line", group=grp_zz)
+i_zigzag_len        = input.int(5, "Pivot Lookback", minval=1, group=grp_zz)
+i_zigzag_color      = input.color(#2196F3, "Zig-Zag Color", group=grp_zz)
+
+grp_pos = "7. Position Management"
+i_pos_enabled       = input.bool(true, "Enable Buy/Sell Logic", group=grp_pos)
+i_pos_tier1_score   = input.int(6, "Tier 1 Entry Score (50%)", minval=3, maxval=10, group=grp_pos)
+i_pos_tier2_score   = input.int(7, "Tier 2 Add-on Score (+25%)", minval=5, maxval=12, group=grp_pos)
+i_pos_tier3_score   = input.int(9, "Tier 3 Max Score (+25%)", minval=7, maxval=15, group=grp_pos)
+i_pos_sl_atr        = input.float(2.0, "Stop Loss (ATR mult)", minval=0.5, step=0.1, group=grp_pos)
+i_pos_tp_atr        = input.float(3.0, "Take Profit (ATR mult)", minval=1.0, step=0.1, group=grp_pos)
+i_pos_trail_activate = input.float(2.5, "Trail Activate (ATR profit)", minval=0.5, step=0.1, group=grp_pos)
+i_pos_trail_dist    = input.float(1.0, "Trail Distance (ATR)", minval=0.3, step=0.1, group=grp_pos)
+i_pos_partial_kernel = input.bool(true, "Partial Close at Kernel Mid", group=grp_pos)
+i_pos_partial_mr    = input.bool(true, "Partial Close at Opposite MR", group=grp_pos)
+i_pos_reentry_cd    = input.int(5, "Re-entry Cooldown Bars", minval=0, maxval=20, group=grp_pos)
+i_pos_show_panel    = input.bool(true, "Show Position Panel", group=grp_pos)
+
+grp_adv = "8. Advanced Training"
+i_adv_downsample    = input.int(1, "Downsample Factor", minval=1, maxval=20, group=grp_adv)
+i_adv_reset_factor  = input.float(0.5, "Neighbor Reset Factor", minval=0.0, maxval=1.0, step=0.1, group=grp_adv)
+
+grp_vis = "9. Visuals"
+i_bull_color        = input.color(#00E676, "Bullish Color", group=grp_vis)
+i_bear_color        = input.color(#FF1744, "Bearish Color", group=grp_vis)
+i_neutral_color     = input.color(#78909C, "Neutral Color", group=grp_vis)
+i_kernel_a_color    = input.color(#448AFF, "Kernel A Color", group=grp_vis)
+i_kernel_b_color    = input.color(#FFAB40, "Kernel B Color", group=grp_vis)
+i_kernel_a_width    = input.int(2, "Kernel A Line Width", minval=1, maxval=4, group=grp_vis)
+i_kernel_b_width    = input.int(1, "Kernel B Line Width", minval=1, maxval=4, group=grp_vis)
+i_fill_opacity      = input.int(15, "Fill Opacity (0-100)", minval=0, maxval=100, group=grp_vis)
+i_exit_color        = input.color(#FF9800, "Exit Marker Color", group=grp_vis)
+
+// =========================================================================
+// 2. KERNEL REGRESSION FUNCTIONS
+// =========================================================================
+f_distance(float current_val, float hist_val) =>
+    math.pow(current_val - hist_val, 2)
+
+f_kernel_weight_rq(float dist_sq, float bandwidth, float alpha) =>
+    math.pow(1.0 + dist_sq / (2.0 * alpha * math.pow(bandwidth, 2)), -alpha)
+
+f_kernel_weight_gauss(float dist_sq, float bandwidth) =>
+    math.exp(-dist_sq / (2.0 * math.pow(bandwidth, 2)))
+
+f_nadaraya_watson(series float src, int lookback, string k_type, float bandwidth, float alpha, int downsample, float reset_factor) =>
+    float sum_wy = 0.0
+    float sum_w  = 0.0
+    float current_src = src
+    if bar_index > lookback
+        for i = 0 to lookback - 1
+            if downsample > 1
+                if i % downsample != 0
+                    continue
+            float decay = reset_factor == 1.0 ? 1.0 : math.pow(reset_factor, i / math.max(1, lookback))
+            float dist_sq = f_distance(current_src, src[i])
+            float w = 0.0
+            if k_type == "Rational Quadratic"
+                w := f_kernel_weight_rq(dist_sq, bandwidth, alpha) * decay
+            else
+                w := f_kernel_weight_gauss(dist_sq, bandwidth) * decay
+            if w > 1e-6
+                sum_wy += w * src[i]
+                sum_w  += w
+    sum_w > 0 ? sum_wy / sum_w : src
+
+// =========================================================================
+// 3. CORE COMPUTATIONS
+// =========================================================================
+float src_price = close
+float cur_atr = ta.atr(i_envelope_atr_len)
+
+float kernelA = f_nadaraya_watson(src_price, i_kernelA_lookback, i_kernelA_type, i_kernelA_bandwidth, i_kernelA_alpha, i_adv_downsample, i_adv_reset_factor)
+float kernelB = f_nadaraya_watson(src_price, i_kernelB_lookback, i_kernelB_type, i_kernelB_bandwidth, i_kernelB_alpha, i_adv_downsample, i_adv_reset_factor)
+
+// Envelope
+float band_width = i_envelope_method == "ATR" ? cur_atr * i_envelope_mult : ta.stdev(close - kernelA, i_envelope_atr_len) * i_envelope_mult
+float upper_band = kernelA + band_width
+float lower_band = kernelA - band_width
+
+// =========================================================================
+// 4. HTF TREND FILTER
+// =========================================================================
+float htf_close = request.security(syminfo.tickerid, i_htf_res, close, lookahead=barmerge.lookahead_off)
+float htf_kernel = f_nadaraya_watson(htf_close, i_htf_lookback, "Rational Quadratic", i_htf_bandwidth, 1.0, 1, 0.5)
+
+var int htf_state = 0
+if i_htf_enabled
+    float htf_slope = htf_kernel - nz(htf_kernel[1], htf_kernel)
+    if htf_close > htf_kernel and htf_slope > 0
+        htf_state := 1
+    else if htf_close < htf_kernel and htf_slope < 0
+        htf_state := -1
+    else
+        htf_state := 0
+
+// =========================================================================
+// 5. MEAN REVERSION DETECTOR
+// =========================================================================
+float residual = close - kernelA
+float sigma = ta.stdev(residual, i_mr_residual_len)
+float z_score = sigma > 0 ? residual / sigma : 0.0
+
+int mr_signal = 0
+int mr_tier = 0
+bool mr_long_ok  = not i_htf_enabled or htf_state != -1
+bool mr_short_ok = not i_htf_enabled or htf_state != 1
+
+if i_mr_enabled
+    if z_score <= -i_mr_strong_sigma and mr_long_ok
+        mr_signal := 6
+        mr_tier := 2
+    else if z_score <= -i_mr_regular_sigma and mr_long_ok
+        mr_signal := 5
+        mr_tier := 1
+    else if z_score >= i_mr_strong_sigma and mr_short_ok
+        mr_signal := -6
+        mr_tier := 2
+    else if z_score >= i_mr_regular_sigma and mr_short_ok
+        mr_signal := -5
+        mr_tier := 1
+
+// =========================================================================
+// 6. FIRST PULLBACK FSM
+// =========================================================================
+var int pb_state = 0
+var int pb_cd_count = 0
+var float pb_extreme = 0.0
+
+float vol_sma = ta.sma(volume, 20)
+bool vol_valid = not i_pb_vol_confirm or (volume > vol_sma * i_pb_vol_mult)
+int pb_signal = 0
+
+if i_pb_enabled
+    if pb_state == 5
+        pb_cd_count += 1
+        if pb_cd_count >= i_pb_cooldown
+            pb_state := 0
+            pb_cd_count := 0
+    if pb_state == 0
+        if close > upper_band and vol_valid
+            pb_state := 1
+            pb_extreme := high
+        else if close < lower_band and vol_valid
+            pb_state := 3
+            pb_extreme := low
+    if pb_state == 1
+        pb_extreme := math.max(pb_extreme, high)
+        if close < upper_band and close > lower_band
+            pb_state := 2
+        else if close < lower_band
+            pb_state := 0
+    if pb_state == 2
+        if close > pb_extreme
+            pb_signal := 4
+            pb_state := 5
+            pb_cd_count := 0
+        else if close < lower_band
+            pb_state := 0
+    if pb_state == 3
+        pb_extreme := math.min(pb_extreme, low)
+        if close > lower_band and close < upper_band
+            pb_state := 4
+        else if close > upper_band
+            pb_state := 0
+    if pb_state == 4
+        if close < pb_extreme
+            pb_signal := -4
+            pb_state := 5
+            pb_cd_count := 0
+        else if close > upper_band
+            pb_state := 0
+
+// =========================================================================
+// 7. TREND CROSSOVER
+// =========================================================================
+int trend_signal = 0
+if ta.crossover(kernelA, kernelB)
+    trend_signal := 3
+else if ta.crossunder(kernelA, kernelB)
+    trend_signal := -3
+
+// =========================================================================
+// 8. ZIG-ZAG TRACKER
+// =========================================================================
+float pivot_high = ta.pivothigh(high, i_zigzag_len, i_zigzag_len)
+float pivot_low  = ta.pivotlow(low, i_zigzag_len, i_zigzag_len)
+
+var float last_pv_price = na
+var int   last_pv_bar   = na
+var int   last_pv_dir   = 0
+
+if i_show_zigzag
+    if not na(pivot_high)
+        if last_pv_dir != 1 and not na(last_pv_price)
+            line.new(last_pv_bar, last_pv_price, bar_index - i_zigzag_len, pivot_high, color=i_zigzag_color, width=2, style=line.style_dotted)
+        last_pv_price := pivot_high
+        last_pv_bar   := bar_index - i_zigzag_len
+        last_pv_dir   := 1
+    if not na(pivot_low)
+        if last_pv_dir != -1 and not na(last_pv_price)
+            line.new(last_pv_bar, last_pv_price, bar_index - i_zigzag_len, pivot_low, color=i_zigzag_color, width=2, style=line.style_dotted)
+        last_pv_price := pivot_low
+        last_pv_bar   := bar_index - i_zigzag_len
+        last_pv_dir   := -1
+
+// =========================================================================
+// 9. CONFLUENCE SCORING & POSITION MANAGER
+// =========================================================================
+// Position states: 0=FLAT, 1=T1_LONG, 2=T2_LONG, 3=T3_LONG, -1=T1_SHORT, -2=T2_SHORT, -3=T3_SHORT
+var int   pos_state       = 0
+var float pos_entry_price = na
+var float pos_peak_price  = na
+var int   pos_size_pct    = 0
+var int   daily_trades    = 0
+var int   last_trade_day  = 0
+var int   exit_cd_counter = 0  // Re-entry cooldown counter
+
+// Reset daily trade count
+int cur_day = dayofmonth
+if cur_day != last_trade_day
+    daily_trades := 0
+    last_trade_day := cur_day
+
+// Decrement re-entry cooldown
+if exit_cd_counter > 0
+    exit_cd_counter -= 1
+
+// Confluence score
+int long_score  = 0
+int short_score = 0
+
+if i_pos_enabled
+    // HTF alignment (+2)
+    if htf_state == 1
+        long_score += 2
+    if htf_state == -1
+        short_score += 2
+    // Kernel crossover direction (+2)
+    if kernelA > kernelB
+        long_score += 2
+    if kernelA < kernelB
+        short_score += 2
+    // First Pullback (+3)
+    if pb_signal == 4
+        long_score += 3
+    if pb_signal == -4
+        short_score += 3
+    // Mean Reversion Regular (+2) / Strong (+4)
+    if mr_signal == 5
+        long_score += 2
+    else if mr_signal == 6
+        long_score += 4
+    if mr_signal == -5
+        short_score += 2
+    else if mr_signal == -6
+        short_score += 4
+    // Price inside envelope (+1)
+    if close >= lower_band and close <= upper_band
+        long_score  += 1
+        short_score += 1
+    // Volume confirmation (+1) — directional: only boost the side matching candle direction
+    if vol_valid
+        if close > open
+            long_score  += 1
+        else if close < open
+            short_score += 1
+
+// Position action tracking
+string pos_action = "NONE"
+int    pos_action_size = 0
+bool   pos_is_long  = pos_state > 0
+bool   pos_is_short = pos_state < 0
+
+if i_pos_enabled
+    // ---- EXIT CHECKS (priority order) ----
+    if pos_state != 0
+        float atr_val = cur_atr
+
+        // 1. Stop Loss
+        if pos_is_long and close <= pos_entry_price - i_pos_sl_atr * atr_val
+            pos_action := "EXIT_SL"
+            pos_action_size := 100
+            pos_state := 0
+            pos_size_pct := 0
+            exit_cd_counter := i_pos_reentry_cd
+        else if pos_is_short and close >= pos_entry_price + i_pos_sl_atr * atr_val
+            pos_action := "EXIT_SL"
+            pos_action_size := 100
+            pos_state := 0
+            pos_size_pct := 0
+            exit_cd_counter := i_pos_reentry_cd
+
+        // 2. Kernel cross against
+        else if pos_is_long and trend_signal == -3
+            pos_action := "EXIT_CROSS"
+            pos_action_size := 100
+            pos_state := 0
+            pos_size_pct := 0
+            exit_cd_counter := i_pos_reentry_cd
+        else if pos_is_short and trend_signal == 3
+            pos_action := "EXIT_CROSS"
+            pos_action_size := 100
+            pos_state := 0
+            pos_size_pct := 0
+            exit_cd_counter := i_pos_reentry_cd
+
+        // 3. Take Profit
+        else if pos_is_long and close >= pos_entry_price + i_pos_tp_atr * atr_val
+            pos_action := "EXIT_TP"
+            pos_action_size := 100
+            pos_state := 0
+            pos_size_pct := 0
+            exit_cd_counter := i_pos_reentry_cd
+        else if pos_is_short and close <= pos_entry_price - i_pos_tp_atr * atr_val
+            pos_action := "EXIT_TP"
+            pos_action_size := 100
+            pos_state := 0
+            pos_size_pct := 0
+            exit_cd_counter := i_pos_reentry_cd
+
+        // 4. Trailing stop
+        else
+            if pos_is_long
+                pos_peak_price := math.max(nz(pos_peak_price, close), high)
+                float profit = pos_peak_price - pos_entry_price
+                if profit >= i_pos_trail_activate * atr_val
+                    float trail_stop = pos_peak_price - i_pos_trail_dist * atr_val
+                    if close <= trail_stop
+                        pos_action := "EXIT_TRAIL"
+                        pos_action_size := 100
+                        pos_state := 0
+                        pos_size_pct := 0
+                        exit_cd_counter := i_pos_reentry_cd
+            else if pos_is_short
+                pos_peak_price := math.min(nz(pos_peak_price, close), low)
+                float profit_s = pos_entry_price - pos_peak_price
+                if profit_s >= i_pos_trail_activate * atr_val
+                    float trail_stop_s = pos_peak_price + i_pos_trail_dist * atr_val
+                    if close >= trail_stop_s
+                        pos_action := "EXIT_TRAIL"
+                        pos_action_size := 100
+                        pos_state := 0
+                        pos_size_pct := 0
+                        exit_cd_counter := i_pos_reentry_cd
+
+        // 5. Partial exit: opposite MR signal → close 50%
+        if pos_action == "NONE" and i_pos_partial_mr
+            if pos_is_long and (mr_signal == -5 or mr_signal == -6)
+                pos_action := "PARTIAL_MR"
+                pos_action_size := 50
+                pos_size_pct := math.max(0, pos_size_pct - 50)
+                if pos_size_pct <= 0
+                    pos_state := 0
+                else
+                    pos_state := pos_state > 1 ? pos_state - 1 : pos_state
+            else if pos_is_short and (mr_signal == 5 or mr_signal == 6)
+                pos_action := "PARTIAL_MR"
+                pos_action_size := 50
+                pos_size_pct := math.max(0, pos_size_pct - 50)
+                if pos_size_pct <= 0
+                    pos_state := 0
+                else
+                    pos_state := pos_state < -1 ? pos_state + 1 : pos_state
+
+        // 6. Partial exit: price returns to kernel midline → close 25% (only if in profit > 0.5 ATR)
+        if pos_action == "NONE" and i_pos_partial_kernel
+            float unreal_l = close - nz(pos_entry_price)
+            float unreal_s = nz(pos_entry_price) - close
+            if pos_is_long and close[1] > kernelA[1] and close <= kernelA and unreal_l > 0.5 * atr_val
+                pos_action := "PARTIAL_MID"
+                pos_action_size := 25
+                pos_size_pct := math.max(0, pos_size_pct - 25)
+                if pos_size_pct <= 0
+                    pos_state := 0
+            else if pos_is_short and close[1] < kernelA[1] and close >= kernelA and unreal_s > 0.5 * atr_val
+                pos_action := "PARTIAL_MID"
+                pos_action_size := 25
+                pos_size_pct := math.max(0, pos_size_pct - 25)
+                if pos_size_pct <= 0
+                    pos_state := 0
+
+        // 7. HTF trend flips against → close 50%
+        if pos_action == "NONE"
+            if pos_is_long and htf_state == -1
+                pos_action := "PARTIAL_HTF"
+                pos_action_size := 50
+                pos_size_pct := math.max(0, pos_size_pct - 50)
+                if pos_size_pct <= 0
+                    pos_state := 0
+            else if pos_is_short and htf_state == 1
+                pos_action := "PARTIAL_HTF"
+                pos_action_size := 50
+                pos_size_pct := math.max(0, pos_size_pct - 50)
+                if pos_size_pct <= 0
+                    pos_state := 0
+
+    // ---- ENTRY CHECKS ----
+    if pos_action == "NONE"
+        // Tier 1: Initial entry (50%)
+        if pos_state == 0 and exit_cd_counter == 0
+            if long_score >= i_pos_tier1_score and long_score > short_score
+                pos_action := "BUY_T1"
+                pos_action_size := 50
+                pos_state := 1
+                pos_size_pct := 50
+                pos_entry_price := close
+                pos_peak_price := close
+                daily_trades += 1
+            else if short_score >= i_pos_tier1_score and short_score > long_score
+                pos_action := "SELL_T1"
+                pos_action_size := 50
+                pos_state := -1
+                pos_size_pct := 50
+                pos_entry_price := close
+                pos_peak_price := close
+                daily_trades += 1
+        // Tier 2: Add-on (+25%)
+        else if pos_state == 1 and long_score >= i_pos_tier2_score
+            pos_action := "BUY_T2"
+            pos_action_size := 25
+            pos_state := 2
+            pos_size_pct := 75
+        else if pos_state == -1 and short_score >= i_pos_tier2_score
+            pos_action := "SELL_T2"
+            pos_action_size := 25
+            pos_state := -2
+            pos_size_pct := 75
+        // Tier 3: Max (+25%)
+        else if pos_state == 2 and long_score >= i_pos_tier3_score
+            pos_action := "BUY_T3"
+            pos_action_size := 25
+            pos_state := 3
+            pos_size_pct := 100
+        else if pos_state == -2 and short_score >= i_pos_tier3_score
+            pos_action := "SELL_T3"
+            pos_action_size := 25
+            pos_state := -3
+            pos_size_pct := 100
+
+// =========================================================================
+// 10. SIGNAL STREAM ENCODING
+// =========================================================================
+int encoded_signal = 0
+if mr_signal == 6 or mr_signal == -6
+    encoded_signal := mr_signal
+else if mr_signal == 5 or mr_signal == -5
+    encoded_signal := mr_signal
+else if pb_signal != 0
+    encoded_signal := pb_signal
+else if trend_signal != 0
+    encoded_signal := trend_signal
+else if i_htf_enabled and htf_state != nz(htf_state[1])
+    encoded_signal := htf_state
+
+// =========================================================================
+// 11. VISUALS & PLOTTING
+// =========================================================================
+
+// Background tint (HTF trend)
+color bg_c = na
+if i_htf_show_bg and i_htf_enabled
+    if htf_state == 1
+        bg_c := color.new(i_htf_bull_color, 92)
+    else if htf_state == -1
+        bg_c := color.new(i_htf_bear_color, 92)
+bgcolor(bg_c, title="HTF Trend Background")
+
+// Kernel lines
+color kernel_color = kernelA > kernelB ? i_bull_color : i_bear_color
+plot(kernelA, "Kernel A (Fast)", color=i_kernel_a_color, linewidth=i_kernel_a_width)
+plot(kernelB, "Kernel B (Slow)", color=i_kernel_b_color, linewidth=i_kernel_b_width)
+
+// Envelope bands + fill
+p_up = plot(upper_band, "Upper Band", color=color.new(i_bear_color, 80))
+p_dn = plot(lower_band, "Lower Band", color=color.new(i_bull_color, 80))
+fill(p_up, p_dn, color=color.new(kernel_color, 100 - i_fill_opacity), title="Envelope Fill")
+
+// Mean Reversion signals
+plotshape(mr_signal == 6,  "Strong MR Long",  shape.diamond, location.belowbar, color=i_bull_color,                     size=size.normal)
+plotshape(mr_signal == 5,  "Regular MR Long",  shape.diamond, location.belowbar, color=color.new(i_bull_color, 40),     size=size.tiny)
+plotshape(mr_signal == -6, "Strong MR Short", shape.diamond, location.abovebar, color=i_bear_color,                     size=size.normal)
+plotshape(mr_signal == -5, "Regular MR Short", shape.diamond, location.abovebar, color=color.new(i_bear_color, 40),     size=size.tiny)
+
+// Pullback signals
+plotshape(pb_signal ==  4, "Pullback Bull ▲", shape.triangleup,   location.belowbar, color=i_bull_color, size=size.normal)
+plotshape(pb_signal == -4, "Pullback Bear ▼", shape.triangledown, location.abovebar, color=i_bear_color, size=size.normal)
+
+// Position labels  (Buy / Sell / Exit)
+if i_pos_enabled
+    if pos_action == "BUY_T1"
+        label.new(bar_index, low, "B1\n50%", style=label.style_label_up, color=i_bull_color, textcolor=color.white, size=size.small)
+    else if pos_action == "BUY_T2"
+        label.new(bar_index, low, "B2\n+25%", style=label.style_label_up, color=i_bull_color, textcolor=color.white, size=size.tiny)
+    else if pos_action == "BUY_T3"
+        label.new(bar_index, low, "B3\n+25%", style=label.style_label_up, color=i_bull_color, textcolor=color.white, size=size.tiny)
+    else if pos_action == "SELL_T1"
+        label.new(bar_index, high, "S1\n50%", style=label.style_label_down, color=i_bear_color, textcolor=color.white, size=size.small)
+    else if pos_action == "SELL_T2"
+        label.new(bar_index, high, "S2\n+25%", style=label.style_label_down, color=i_bear_color, textcolor=color.white, size=size.tiny)
+    else if pos_action == "SELL_T3"
+        label.new(bar_index, high, "S3\n+25%", style=label.style_label_down, color=i_bear_color, textcolor=color.white, size=size.tiny)
+    else if pos_action == "EXIT_SL"
+        label.new(bar_index, pos_is_long ? high : low, "SL ✕", style=pos_is_long ? label.style_label_down : label.style_label_up, color=i_exit_color, textcolor=color.white, size=size.small)
+    else if pos_action == "EXIT_TP"
+        label.new(bar_index, pos_is_long ? high : low, "TP ✕", style=pos_is_long ? label.style_label_down : label.style_label_up, color=color.new(i_bull_color, 20), textcolor=color.white, size=size.small)
+    else if pos_action == "EXIT_TRAIL"
+        label.new(bar_index, pos_is_long ? high : low, "Trail ✕", style=pos_is_long ? label.style_label_down : label.style_label_up, color=i_exit_color, textcolor=color.white, size=size.small)
+    else if pos_action == "EXIT_CROSS"
+        label.new(bar_index, pos_is_long ? high : low, "Cross ✕", style=pos_is_long ? label.style_label_down : label.style_label_up, color=i_exit_color, textcolor=color.white, size=size.small)
+    else if pos_action == "PARTIAL_MR" or pos_action == "PARTIAL_MID" or pos_action == "PARTIAL_HTF"
+        string pct_txt = str.tostring(pos_action_size) + "%"
+        label.new(bar_index, pos_is_long ? high : low, "Partial\n" + pct_txt, style=pos_is_long ? label.style_label_down : label.style_label_up, color=color.new(i_exit_color, 30), textcolor=color.white, size=size.tiny)
+
+// Position info panel (top-right table)
+if i_pos_enabled and i_pos_show_panel
+    var table panel = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 70), border_width=1, border_color=color.gray)
+    string dir_txt = pos_state > 0 ? "LONG" : pos_state < 0 ? "SHORT" : "FLAT"
+    color dir_clr = pos_state > 0 ? i_bull_color : pos_state < 0 ? i_bear_color : i_neutral_color
+    float unreal_pnl = pos_state > 0 ? close - nz(pos_entry_price) : pos_state < 0 ? nz(pos_entry_price) - close : 0.0
+
+    // Suggestion Logic
+    string sugg_txt = ""
+    color sugg_clr  = color.white
+    
+    // Suggestion logic based on current state and confluence score
+    if pos_state == 0
+        if mr_signal == 6 or mr_signal == -6
+            sugg_txt := "Wait for Reversal (Extreme MR)"
+            sugg_clr := color.yellow
+        else if long_score >= 4 and short_score < 4
+            sugg_txt := "Looking for Long Entry"
+            sugg_clr := i_bull_color
+        else if short_score >= 4 and long_score < 4
+            sugg_txt := "Looking for Short Entry"
+            sugg_clr := i_bear_color
+        else if htf_state == 0
+            sugg_txt := "Neutral Market. Be Patient."
+            sugg_clr := i_neutral_color
+        else
+            sugg_txt := "Wait for Pullback Signal"
+            sugg_clr := i_neutral_color
+    else if pos_state > 0
+        if mr_signal == -6 or mr_signal == -5
+            sugg_txt := "Consider taking Partial Profits!"
+            sugg_clr := color.yellow
+        else if trend_signal == -3
+            sugg_txt := "CAUTION: Bearish Trend Shift"
+            sugg_clr := color.red
+        else if long_score >= i_pos_tier2_score and pos_state == 1
+            sugg_txt := "Trend Strong. Can Add T2"
+            sugg_clr := i_bull_color
+        else
+            sugg_txt := "Hold Long. Manage Stop Loss."
+            sugg_clr := color.green
+    else if pos_state < 0
+        if mr_signal == 6 or mr_signal == 5
+            sugg_txt := "Consider taking Partial Profits!"
+            sugg_clr := color.yellow
+        else if trend_signal == 3
+            sugg_txt := "CAUTION: Bullish Trend Shift"
+            sugg_clr := color.red
+        else if short_score >= i_pos_tier2_score and pos_state == -1
+            sugg_txt := "Trend Strong. Can Add T2"
+            sugg_clr := i_bear_color
+        else
+            sugg_txt := "Hold Short. Manage Stop Loss."
+            sugg_clr := color.red
+
+    table.cell(panel, 0, 0, "Position",   text_color=color.white, text_size=size.small)
+    table.cell(panel, 1, 0, dir_txt,       text_color=dir_clr,     text_size=size.small)
+    table.cell(panel, 0, 1, "Size",        text_color=color.white, text_size=size.small)
+    table.cell(panel, 1, 1, str.tostring(pos_size_pct) + "%", text_color=color.white, text_size=size.small)
+    table.cell(panel, 0, 2, "Entry",       text_color=color.white, text_size=size.small)
+    table.cell(panel, 1, 2, pos_state != 0 ? str.tostring(pos_entry_price, format.mintick) : "—", text_color=color.white, text_size=size.small)
+    table.cell(panel, 0, 3, "P&L",         text_color=color.white, text_size=size.small)
+    table.cell(panel, 1, 3, pos_state != 0 ? str.tostring(unreal_pnl, format.mintick) : "—", text_color=unreal_pnl >= 0 ? i_bull_color : i_bear_color, text_size=size.small)
+    table.cell(panel, 0, 4, "Conf L/S",    text_color=color.white, text_size=size.small)
+    table.cell(panel, 1, 4, str.tostring(long_score) + " / " + str.tostring(short_score), text_color=color.white, text_size=size.small)
+    table.cell(panel, 0, 5, "Advice",      text_color=color.white, text_size=size.small)
+    table.cell(panel, 1, 5, sugg_txt,      text_color=sugg_clr,    text_size=size.small)
+
+// Signal stream (hidden plot for external tools)
+plot(encoded_signal, "Signal Stream", display=display.none)
+
+// =========================================================================
+// 12. ALERTS
+// =========================================================================
+// Pullback
+if pb_signal == 4
+    alert("AKRTS: Bullish First Pullback on " + syminfo.ticker, alert.freq_once_per_bar)
+if pb_signal == -4
+    alert("AKRTS: Bearish First Pullback on " + syminfo.ticker, alert.freq_once_per_bar)
+
+// Mean Reversion
+if mr_signal == 6
+    alert("AKRTS: STRONG Mean Reversion Long on " + syminfo.ticker, alert.freq_once_per_bar)
+if mr_signal == 5
+    alert("AKRTS: Regular Mean Reversion Long on " + syminfo.ticker, alert.freq_once_per_bar)
+if mr_signal == -6
+    alert("AKRTS: STRONG Mean Reversion Short on " + syminfo.ticker, alert.freq_once_per_bar)
+if mr_signal == -5
+    alert("AKRTS: Regular Mean Reversion Short on " + syminfo.ticker, alert.freq_once_per_bar)
+
+// Trend Shift
+if trend_signal == 3
+    alert("AKRTS: Bullish Trend Shift on " + syminfo.ticker, alert.freq_once_per_bar)
+if trend_signal == -3
+    alert("AKRTS: Bearish Trend Shift on " + syminfo.ticker, alert.freq_once_per_bar)
+
+// Position alerts
+if pos_action == "BUY_T1"
+    alert("AKRTS: BUY T1 (50%) on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
+if pos_action == "BUY_T2"
+    alert("AKRTS: BUY T2 (+25%) on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
+if pos_action == "BUY_T3"
+    alert("AKRTS: BUY T3 (+25%) on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
+if pos_action == "SELL_T1"
+    alert("AKRTS: SELL T1 (50%) on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
+if pos_action == "SELL_T2"
+    alert("AKRTS: SELL T2 (+25%) on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
+if pos_action == "SELL_T3"
+    alert("AKRTS: SELL T3 (+25%) on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
+if pos_action == "EXIT_SL"
+    alert("AKRTS: EXIT Stop Loss on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
+if pos_action == "EXIT_TP"
+    alert("AKRTS: EXIT Take Profit on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
+if pos_action == "EXIT_TRAIL"
+    alert("AKRTS: EXIT Trailing Stop on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
+if pos_action == "EXIT_CROSS"
+    alert("AKRTS: EXIT Kernel Cross on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
+if pos_action == "PARTIAL_MR" or pos_action == "PARTIAL_MID" or pos_action == "PARTIAL_HTF"
+    alert("AKRTS: PARTIAL EXIT (" + str.tostring(pos_action_size) + "%) on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
+
+// Signal stream alert
+if encoded_signal != 0
+    alert("AKRTS Signal: " + str.tostring(encoded_signal) + " on " + syminfo.ticker, alert.freq_once_per_bar)
