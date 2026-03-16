@@ -48,9 +48,10 @@ i_zigzag_color      = input.color(#2196F3, "Zig-Zag Color", group=grp_zz)
 
 grp_pos = "7. Position Management"
 i_pos_enabled       = input.bool(true, "Enable Buy/Sell Logic", group=grp_pos)
-i_pos_tier1_score   = input.int(6, "Tier 1 Entry Score (50%)", minval=3, maxval=10, group=grp_pos)
-i_pos_tier2_score   = input.int(7, "Tier 2 Add-on Score (+25%)", minval=5, maxval=12, group=grp_pos)
-i_pos_tier3_score   = input.int(9, "Tier 3 Max Score (+25%)", minval=7, maxval=15, group=grp_pos)
+i_pos_mode          = input.string("Easy (100%)", "Position Mode", options=["Easy (100%)", "Complex (50% x 2)"], group=grp_pos)
+i_pos_show_tags     = input.bool(true, "Show Buy/Sell Signal Tags", group=grp_pos)
+i_pos_tier1_score   = input.int(6, "Tier 1 Entry Score", minval=3, maxval=10, group=grp_pos)
+i_pos_tier2_score   = input.int(7, "Tier 2 Add-on Score (Complex Mode)", minval=5, maxval=12, group=grp_pos)
 i_pos_sl_atr        = input.float(2.0, "Stop Loss (ATR mult)", minval=0.5, step=0.1, group=grp_pos)
 i_pos_tp_atr        = input.float(3.0, "Take Profit (ATR mult)", minval=1.0, step=0.1, group=grp_pos)
 i_pos_trail_activate = input.float(2.5, "Trail Activate (ATR profit)", minval=0.5, step=0.1, group=grp_pos)
@@ -441,45 +442,34 @@ if i_pos_enabled
 
     // ---- ENTRY CHECKS ----
     if pos_action == "NONE"
-        // Tier 1: Initial entry (50%)
+        // Tier 1: Initial entry
         if pos_state == 0 and exit_cd_counter == 0
             if long_score >= i_pos_tier1_score and long_score > short_score
                 pos_action := "BUY_T1"
-                pos_action_size := 50
+                pos_action_size := i_pos_mode == "Easy (100%)" ? 100 : 50
                 pos_state := 1
-                pos_size_pct := 50
+                pos_size_pct := i_pos_mode == "Easy (100%)" ? 100 : 50
                 pos_entry_price := close
                 pos_peak_price := close
                 daily_trades += 1
             else if short_score >= i_pos_tier1_score and short_score > long_score
                 pos_action := "SELL_T1"
-                pos_action_size := 50
+                pos_action_size := i_pos_mode == "Easy (100%)" ? 100 : 50
                 pos_state := -1
-                pos_size_pct := 50
+                pos_size_pct := i_pos_mode == "Easy (100%)" ? 100 : 50
                 pos_entry_price := close
                 pos_peak_price := close
                 daily_trades += 1
-        // Tier 2: Add-on (+25%)
-        else if pos_state == 1 and long_score >= i_pos_tier2_score
+        // Tier 2: Add-on (Only in Complex mode)
+        else if pos_state == 1 and long_score >= i_pos_tier2_score and i_pos_mode == "Complex (50% x 2)"
             pos_action := "BUY_T2"
-            pos_action_size := 25
+            pos_action_size := 50
             pos_state := 2
-            pos_size_pct := 75
-        else if pos_state == -1 and short_score >= i_pos_tier2_score
-            pos_action := "SELL_T2"
-            pos_action_size := 25
-            pos_state := -2
-            pos_size_pct := 75
-        // Tier 3: Max (+25%)
-        else if pos_state == 2 and long_score >= i_pos_tier3_score
-            pos_action := "BUY_T3"
-            pos_action_size := 25
-            pos_state := 3
             pos_size_pct := 100
-        else if pos_state == -2 and short_score >= i_pos_tier3_score
-            pos_action := "SELL_T3"
-            pos_action_size := 25
-            pos_state := -3
+        else if pos_state == -1 and short_score >= i_pos_tier2_score and i_pos_mode == "Complex (50% x 2)"
+            pos_action := "SELL_T2"
+            pos_action_size := 50
+            pos_state := -2
             pos_size_pct := 100
 
 // =========================================================================
@@ -531,19 +521,17 @@ plotshape(pb_signal ==  4, "Pullback Bull ▲", shape.triangleup,   location.bel
 plotshape(pb_signal == -4, "Pullback Bear ▼", shape.triangledown, location.abovebar, color=i_bear_color, size=size.normal)
 
 // Position labels  (Buy / Sell / Exit)
-if i_pos_enabled
+if i_pos_enabled and i_pos_show_tags
     if pos_action == "BUY_T1"
-        label.new(bar_index, low, "B1\n50%", style=label.style_label_up, color=i_bull_color, textcolor=color.white, size=size.small)
+        string txt = i_pos_mode == "Easy (100%)" ? "BUY\n100%" : "B1\n50%"
+        label.new(bar_index, low, txt, style=label.style_label_up, color=i_bull_color, textcolor=color.white, size=size.small)
     else if pos_action == "BUY_T2"
-        label.new(bar_index, low, "B2\n+25%", style=label.style_label_up, color=i_bull_color, textcolor=color.white, size=size.tiny)
-    else if pos_action == "BUY_T3"
-        label.new(bar_index, low, "B3\n+25%", style=label.style_label_up, color=i_bull_color, textcolor=color.white, size=size.tiny)
+        label.new(bar_index, low, "B2\n+50%", style=label.style_label_up, color=i_bull_color, textcolor=color.white, size=size.tiny)
     else if pos_action == "SELL_T1"
-        label.new(bar_index, high, "S1\n50%", style=label.style_label_down, color=i_bear_color, textcolor=color.white, size=size.small)
+        string txt = i_pos_mode == "Easy (100%)" ? "SELL\n100%" : "S1\n50%"
+        label.new(bar_index, high, txt, style=label.style_label_down, color=i_bear_color, textcolor=color.white, size=size.small)
     else if pos_action == "SELL_T2"
-        label.new(bar_index, high, "S2\n+25%", style=label.style_label_down, color=i_bear_color, textcolor=color.white, size=size.tiny)
-    else if pos_action == "SELL_T3"
-        label.new(bar_index, high, "S3\n+25%", style=label.style_label_down, color=i_bear_color, textcolor=color.white, size=size.tiny)
+        label.new(bar_index, high, "S2\n+50%", style=label.style_label_down, color=i_bear_color, textcolor=color.white, size=size.tiny)
     else if pos_action == "EXIT_SL"
         label.new(bar_index, pos_is_long ? high : low, "SL ✕", style=pos_is_long ? label.style_label_down : label.style_label_up, color=i_exit_color, textcolor=color.white, size=size.small)
     else if pos_action == "EXIT_TP"
@@ -654,17 +642,15 @@ if trend_signal == -3
 
 // Position alerts
 if pos_action == "BUY_T1"
-    alert("AKRTS: BUY T1 (50%) on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
+    string txt = i_pos_mode == "Easy (100%)" ? "BUY (100%)" : "BUY T1 (50%)"
+    alert("AKRTS: " + txt + " on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
 if pos_action == "BUY_T2"
-    alert("AKRTS: BUY T2 (+25%) on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
-if pos_action == "BUY_T3"
-    alert("AKRTS: BUY T3 (+25%) on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
+    alert("AKRTS: BUY T2 (+50%) on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
 if pos_action == "SELL_T1"
-    alert("AKRTS: SELL T1 (50%) on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
+    string txt = i_pos_mode == "Easy (100%)" ? "SELL (100%)" : "SELL T1 (50%)"
+    alert("AKRTS: " + txt + " on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
 if pos_action == "SELL_T2"
-    alert("AKRTS: SELL T2 (+25%) on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
-if pos_action == "SELL_T3"
-    alert("AKRTS: SELL T3 (+25%) on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
+    alert("AKRTS: SELL T2 (+50%) on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
 if pos_action == "EXIT_SL"
     alert("AKRTS: EXIT Stop Loss on " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar)
 if pos_action == "EXIT_TP"
