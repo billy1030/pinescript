@@ -18,6 +18,7 @@ grp_key = "2. Key Level Settings"
 i_show_poc          = input.bool(true, "Show POC Line", group=grp_key)
 i_show_vah_val      = input.bool(true, "Show VAH/VAL Lines", group=grp_key)
 i_poc_color         = input.color(#FFEB3B, "POC Color", group=grp_key)
+i_poc_width         = input.int(2, "POC Line Width", minval=1, maxval=4, group=grp_key)
 i_vah_color         = input.color(#FF5252, "VAH Color", group=grp_key)
 i_val_color         = input.color(#4CAF50, "VAL Color", group=grp_key)
 
