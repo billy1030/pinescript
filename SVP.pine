@@ -5,8 +5,8 @@ indicator("Smart Volume Profile [SVP]", shorttitle="SVP", overlay=true, max_bars
 // 1. INPUTS & SETTINGS
 // =========================================================================
 grp_vp = "1. Volume Profile Settings"
-i_vp_lookback_mode  = input.string("Fixed Bars", "Lookback Mode", options=["Fixed Bars", "Session"], group=grp_vp)
-i_vp_lookback_bars  = input.int(200, "Lookback Bars (Fixed)", minval=50, maxval=2000, group=grp_vp)
+i_vp_lookback_mode  = input.string("Visible Chart", "Lookback Mode", options=["Visible Chart", "All History (Max 5000)", "Fixed Bars", "Session"], group=grp_vp)
+i_vp_lookback_bars  = input.int(200, "Lookback Bars (Fixed)", minval=50, maxval=5000, group=grp_vp)
 i_vp_num_rows       = input.int(50, "Number of Rows", minval=24, maxval=200, group=grp_vp)
 i_vp_value_area_pct = input.float(70.0, "Value Area (%)", minval=50.0, maxval=90.0, group=grp_vp)
 i_vp_show_histogram = input.bool(true, "Show Histogram", group=grp_vp)
@@ -83,10 +83,37 @@ f_get_lookback_range() =>
     float r_high = high
     float r_low = low
     
-    if i_vp_lookback_mode == "Fixed Bars"
+    if i_vp_lookback_mode == "Visible Chart"
+        int max_i = math.min(bar_index, 4999)
+        int visible_bars = max_i
+        float temp_high = high
+        float temp_low = low
+        for i = 0 to max_i
+            if time[i] < chart.left_visible_bar_time
+                visible_bars := math.max(1, i)
+                break
+            temp_high := math.max(temp_high, high[i])
+            temp_low := math.min(temp_low, low[i])
+        start_idx := bar_index - visible_bars
+        r_high := temp_high
+        r_low := temp_low
+        
+    else if i_vp_lookback_mode == "All History (Max 5000)"
+        int all_bars = math.min(bar_index, 4999)
+        float temp_high = high
+        float temp_low = low
+        for i = 0 to all_bars
+            temp_high := math.max(temp_high, high[i])
+            temp_low := math.min(temp_low, low[i])
+        start_idx := bar_index - all_bars
+        r_high := temp_high
+        r_low := temp_low
+        
+    else if i_vp_lookback_mode == "Fixed Bars"
         start_idx := math.max(0, bar_index - i_vp_lookback_bars + 1)
         r_high := ta.highest(high, i_vp_lookback_bars)
         r_low := ta.lowest(low, i_vp_lookback_bars)
+        
     else if i_vp_lookback_mode == "Session"
         int bars_since_open = ta.barssince(is_new_session)
         int valid_bars = na(bars_since_open) ? 0 : bars_since_open
