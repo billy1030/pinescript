@@ -389,8 +389,8 @@ if i_pos_enabled
                         pos_size_pct := 0
                         exit_cd_counter := i_pos_reentry_cd
 
-        // 5. Partial exit: opposite MR signal → close 50%
-        if pos_action == "NONE" and i_pos_partial_mr
+        // 5. Partial exit: opposite MR signal (Disabled in Easy Mode)
+        if pos_action == "NONE" and i_pos_partial_mr and i_pos_mode != "Easy (100%)"
             if pos_is_long and (mr_signal == -5 or mr_signal == -6)
                 pos_action := "PARTIAL_MR"
                 pos_action_size := 50
@@ -408,8 +408,8 @@ if i_pos_enabled
                 else
                     pos_state := pos_state < -1 ? pos_state + 1 : pos_state
 
-        // 6. Partial exit: price returns to kernel midline → close 25% (only if in profit > 0.5 ATR)
-        if pos_action == "NONE" and i_pos_partial_kernel
+        // 6. Partial exit: price returns to kernel midline (Disabled in Easy Mode)
+        if pos_action == "NONE" and i_pos_partial_kernel and i_pos_mode != "Easy (100%)"
             float unreal_l = close - nz(pos_entry_price)
             float unreal_s = nz(pos_entry_price) - close
             if pos_is_long and close[1] > kernelA[1] and close <= kernelA and unreal_l > 0.5 * atr_val
@@ -425,8 +425,8 @@ if i_pos_enabled
                 if pos_size_pct <= 0
                     pos_state := 0
 
-        // 7. HTF trend flips against → close 50%
-        if pos_action == "NONE"
+        // 7. HTF trend flips against (Disabled in Easy Mode)
+        if pos_action == "NONE" and i_pos_mode != "Easy (100%)"
             if pos_is_long and htf_state == -1
                 pos_action := "PARTIAL_HTF"
                 pos_action_size := 50
@@ -532,13 +532,13 @@ if i_pos_enabled and i_pos_show_tags
         label.new(bar_index, high, txt, style=label.style_label_down, color=i_bear_color, textcolor=color.white, size=size.small)
     else if pos_action == "SELL_T2"
         label.new(bar_index, high, "S2\n+50%", style=label.style_label_down, color=i_bear_color, textcolor=color.white, size=size.tiny)
-    else if pos_action == "EXIT_SL"
+    else if pos_action == "EXIT_SL" and i_pos_mode != "Easy (100%)"
         label.new(bar_index, pos_is_long ? high : low, "SL ✕", style=pos_is_long ? label.style_label_down : label.style_label_up, color=i_exit_color, textcolor=color.white, size=size.small)
-    else if pos_action == "EXIT_TP"
+    else if pos_action == "EXIT_TP" and i_pos_mode != "Easy (100%)"
         label.new(bar_index, pos_is_long ? high : low, "TP ✕", style=pos_is_long ? label.style_label_down : label.style_label_up, color=color.new(i_bull_color, 20), textcolor=color.white, size=size.small)
-    else if pos_action == "EXIT_TRAIL"
+    else if pos_action == "EXIT_TRAIL" and i_pos_mode != "Easy (100%)"
         label.new(bar_index, pos_is_long ? high : low, "Trail ✕", style=pos_is_long ? label.style_label_down : label.style_label_up, color=i_exit_color, textcolor=color.white, size=size.small)
-    else if pos_action == "EXIT_CROSS"
+    else if pos_action == "EXIT_CROSS" and i_pos_mode != "Easy (100%)"
         label.new(bar_index, pos_is_long ? high : low, "Cross ✕", style=pos_is_long ? label.style_label_down : label.style_label_up, color=i_exit_color, textcolor=color.white, size=size.small)
     else if pos_action == "PARTIAL_MR" or pos_action == "PARTIAL_MID" or pos_action == "PARTIAL_HTF"
         string pct_txt = str.tostring(pos_action_size) + "%"
