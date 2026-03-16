@@ -235,19 +235,18 @@ var float last_pv_price = na
 var int   last_pv_bar   = na
 var int   last_pv_dir   = 0
 
-if i_show_zigzag
-    if not na(pivot_high)
-        if last_pv_dir != 1 and not na(last_pv_price)
-            line.new(last_pv_bar, last_pv_price, bar_index - i_zigzag_len, pivot_high, color=i_zigzag_color, width=2, style=line.style_dotted)
-        last_pv_price := pivot_high
-        last_pv_bar   := bar_index - i_zigzag_len
-        last_pv_dir   := 1
-    if not na(pivot_low)
-        if last_pv_dir != -1 and not na(last_pv_price)
-            line.new(last_pv_bar, last_pv_price, bar_index - i_zigzag_len, pivot_low, color=i_zigzag_color, width=2, style=line.style_dotted)
-        last_pv_price := pivot_low
-        last_pv_bar   := bar_index - i_zigzag_len
-        last_pv_dir   := -1
+if not na(pivot_high)
+    if last_pv_dir != 1 and not na(last_pv_price) and i_show_zigzag
+        line.new(last_pv_bar, last_pv_price, bar_index - i_zigzag_len, pivot_high, color=i_zigzag_color, width=2, style=line.style_dotted)
+    last_pv_price := pivot_high
+    last_pv_bar   := bar_index - i_zigzag_len
+    last_pv_dir   := 1
+if not na(pivot_low)
+    if last_pv_dir != -1 and not na(last_pv_price) and i_show_zigzag
+        line.new(last_pv_bar, last_pv_price, bar_index - i_zigzag_len, pivot_low, color=i_zigzag_color, width=2, style=line.style_dotted)
+    last_pv_price := pivot_low
+    last_pv_bar   := bar_index - i_zigzag_len
+    last_pv_dir   := -1
 
 // =========================================================================
 // 9. CONFLUENCE SCORING & POSITION MANAGER
@@ -276,6 +275,13 @@ int long_score  = 0
 int short_score = 0
 
 if i_pos_enabled
+    // Zig-Zag Direction Follower (+3)
+    // If the last pivot was a low, the zig-zag leg is current moving UP.
+    if last_pv_dir == -1
+        long_score += 3
+    // If the last pivot was a high, the zig-zag leg is currently moving DOWN.
+    if last_pv_dir == 1
+        short_score += 3
     // HTF alignment (+2)
     if htf_state == 1
         long_score += 2
